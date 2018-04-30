@@ -31,7 +31,7 @@ class PyTest(TestCommand):
 
 
 setup(name='apa102_gpiod',
-      version='0.1',
+      version='0.1.1',
       description='apa102 driver using userspace gpio character device through '
                   'libgpiod',
       long_description=readme(),
@@ -49,4 +49,5 @@ setup(name='apa102_gpiod',
       author_email='me@shenghaoyang.info',
       license='MIT',
       packages=['apa102_gpiod'],
+      python_requires='>=3.6, <4',
       zip_safe=False)
