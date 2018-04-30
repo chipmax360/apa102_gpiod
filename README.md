@@ -30,7 +30,10 @@ Tests
 -----
 - Tests can be found in the ``test`` directory.
     - Only unit tests are present now, more tests welcome.
-- Use your favourite test runner to run the tests.
+- Use your favourite test runner to run the tests, or:
+    - ``pip install setuptools``
+    - ``pip install pytest``
+    - ``python setup.py test``
 
 
 Performance
