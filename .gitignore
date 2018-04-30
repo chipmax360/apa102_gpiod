@@ -1,0 +1,13 @@
+# Compiled python modules.
+*.pyc
+
+# Test caches
+/test/.pytest_cache
+.pytest_cache
+.coverage
+
+# Setuptools distribution folder.
+/dist/
+
+# Python egg metadata.
+/*.egg-info
