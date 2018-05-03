@@ -103,17 +103,17 @@ class APA102(Sequence):
         self._leds = leds
         self._clk = clk
         self._data = data
+        self._data_modified = True
 
         self._chip = gpiod.Chip(chip, gpiod.Chip.OPEN_BY_PATH)
         self._lines = self._chip.get_lines((clk, data))
         self._lines.request(f'apa102_gpiod',
                             gpiod.LINE_REQ_DIR_OUT, 0, (0, 0))
 
-        self._data = bytearray(APA102_START) + bytearray(self._leds * 4)
+        self._data = bytearray(APA102_START) + bytearray(
+            _pack_wrgb(LedOutput(0, 0, 0, 0)) * len(self))
         self._data.extend(_generate_end_sequence(self._leds))
 
-        for i in range(len(self)):
-            self[i] = LedOutput(0, 0, 0, 0)
         if reset:
             self.commit()
 
@@ -147,7 +147,9 @@ class APA102(Sequence):
         if not (0 <= i < self._leds):
             raise IndexError(f'{self.__class__.__name__}: '
                              'out-of-range LED index')
-        self._data[4 + (i * 4):8 + (i * 4)] = _pack_wrgb(o)
+        if o != self[i]:
+            self._data[4 + (i * 4):8 + (i * 4)] = _pack_wrgb(o)
+            self._data_modified = True
 
     def __len__(self) -> int:
         """
@@ -203,7 +205,9 @@ class APA102(Sequence):
 
             Undefined once the object has been ``close()``'d
         """
-        self._write_bytes(self._data)
+        if self._data_modified:
+            self._write_bytes(self._data)
+        self._data_modified = False
 
     def close(self):
         """

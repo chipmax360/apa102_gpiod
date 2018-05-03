@@ -179,15 +179,31 @@ class TestAPA102(unittest.TestCase):
         # on it before the clock pin was raised to latch in the bit.
         # We expect 8 calls to set the clock pin high, to latch in 8 bits.
         # We expect the MSB to be clocked out first
+        waveform = []
+
+        # This function is required because the argument is a list,
+        # so inspecting it from the sequence of calls stored by the
+        # mock object is useless, since the list has been mutated and
+        # the resulting waveform assembled from the list would
+        # all reflect the line states after the last bit was clocked,
+        # since the argument stored in the call objects all reference the same
+        # list, and ths causes the waveform will have static line levels of
+        # active for clock and the state of the least significant
+        # bit for data, which is obviously useless for comparisons.
+        # We use a side effect function to capture the
+        # contents of the list on each call, so we can assemble the waveform
+        # correctly.
+        def record_line_state(state):
+            waveform.append((state[0], state[1]))
+
+        self.mock_chip.return_value.get_lines.return_value.set_values. \
+            side_effect = record_line_state
         self.instance._write_byte(0x88)
-        calls = self.mock_chip.return_value.get_lines. \
-            return_value.set_values.call_args_list
-        waveform = [(c[0][0][0], c[0][0][1]) for c in calls]
 
         bit = 7
         for t, (clock, data) in enumerate(waveform):
             if clock:
-                self.assertGreaterEqual(bit, 0)
+                self.assertGreaterEqual(bit, (0x88 >> bit) & 0x01)
                 self.assertEqual(waveform[t - 1][1], (0x88 >> bit) & 0x01)
                 self.assertEqual(waveform[t - 1][0], 0)
                 bit -= 1
@@ -219,7 +235,39 @@ class TestAPA102(unittest.TestCase):
             self.instance.commit()
             mock_write_bytes.assert_called_once()
             called_payload = mock_write_bytes.call_args[0][1]
+            self.maxDiff = None
             self.assertSequenceEqual(called_payload, payload)
+
+    def test_commit_method_correctly_performs_delta_update(self):
+        # First call should update because reset was not specified
+        with patch.object(self.instance, '_write_bytes', spec_set=True,
+                          autospec=True) as mock_write_bytes:
+            self.instance.commit()
+            mock_write_bytes.assert_called_once()
+
+        # Second call should not update because the delta flag should have been
+        # cleared
+        with patch.object(self.instance, '_write_bytes', spec_set=True,
+                          autospec=True) as mock_write_bytes:
+            self.instance.commit()
+            mock_write_bytes.assert_not_called()
+
+        # Modifying the framebuffer with a different value should
+        # cause an update.
+        self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
+        with patch.object(self.instance, '_write_bytes', spec_set=True,
+                          autospec=True) as mock_write_bytes:
+            self.instance.commit()
+            mock_write_bytes.assert_called_once()
+
+        # Updating the framebuffer with the same value should not
+        # cause an update
+        self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
+
+        with patch.object(self.instance, '_write_bytes', spec_set=True,
+                          autospec=True) as mock_write_bytes:
+            self.instance.commit()
+            mock_write_bytes.assert_not_called()
 
     def test_close_method_correctly_releases_resources(self):
         self.instance.close()
