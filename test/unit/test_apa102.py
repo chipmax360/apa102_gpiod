@@ -7,7 +7,7 @@ See LICENSE.txt for more details.
 """
 import gpiod
 import unittest
-from unittest.mock import patch, call
+from unittest.mock import patch
 
 import apa102_gpiod.apa102 as apa102
 
@@ -16,7 +16,6 @@ class TestMiscFunctions(unittest.TestCase):
     """
     Test class to test the miscellaneous functions in the apa102 module.
     """
-
     def test_check_ledoutput_range_raises_valueerror_on_invalid_arguments(self):
         test_ranges = {
             'brightness': (-10, 50),
@@ -173,101 +172,95 @@ class TestAPA102(unittest.TestCase):
         self.assertTrue((output_present in self.instance) is True)
         self.assertTrue((output_not_present in self.instance) is False)
 
-    def test_write_byte_method_correctly_writes_byte_to_leds(self):
+    def test_commit_method_correctly_writes_bytes_to_leds(self):
         # Simply tests if a "sort-of" valid waveform is output on the I/O lines.
         # We expect that the data pin has already had the data value output
         # on it before the clock pin was raised to latch in the bit.
-        # We expect 8 calls to set the clock pin high, to latch in 8 bits.
-        # We expect the MSB to be clocked out first
+        # We expect 8 * len calls to set the clock pin high, to latch in
+        # 8 * len bits. We expect the MSB to be clocked out first.
         waveform = []
 
-        # This function is required because the argument is a list,
-        # so inspecting it from the sequence of calls stored by the
-        # mock object is useless, since the list has been mutated and
-        # the resulting waveform assembled from the list would
-        # all reflect the line states after the last bit was clocked,
-        # since the argument stored in the call objects all reference the same
-        # list, and ths causes the waveform will have static line levels of
-        # active for clock and the state of the least significant
-        # bit for data, which is obviously useless for comparisons.
-        # We use a side effect function to capture the
-        # contents of the list on each call, so we can assemble the waveform
-        # correctly.
         def record_line_state(state):
             waveform.append((state[0], state[1]))
 
         self.mock_chip.return_value.get_lines.return_value.set_values. \
             side_effect = record_line_state
-        self.instance._write_byte(0x88)
-
-        bit = 7
+        # Force commiting of data
+        self.instance._data_modified = True
+        self.instance.commit()
+        test_int = int.from_bytes(self.instance._data, byteorder='big',
+                                  signed=False)
+        bit = (len(self.instance._data) * 8) - 1
         for t, (clock, data) in enumerate(waveform):
+            # Ensure that we do not clock out too many bits
+            self.assertGreaterEqual(bit, 0)
             if clock:
-                self.assertGreaterEqual(bit, (0x88 >> bit) & 0x01)
-                self.assertEqual(waveform[t - 1][1], (0x88 >> bit) & 0x01)
+                # Ensure that the previous cycle had set the data line to the
+                # correct state
+                self.assertEqual(waveform[t - 1][1], (test_int >> bit) & 0x01)
+                # Ensure that the clock line was low previously
                 self.assertEqual(waveform[t - 1][0], 0)
+                # Consider that one bit has been successfully clocked out
                 bit -= 1
             else:
-                self.assertGreaterEqual(bit, 0)
-                self.assertEqual(data, (0x88 >> bit) & 0x01)
-
-    def test_write_bytes_method_correctly_writes_bytes_to_leds(self):
-        # Just test that the _write_byte method is called for each byte
-        with patch('apa102_gpiod.apa102.APA102._write_byte', autospec=True,
-                   spec_set=True) as mock_write_byte:
-            self.setUp()
-            payload = b'\xde\xad\xbe\xef'
-            self.instance._write_bytes(payload)
-            mock_write_byte.assert_has_calls(
-                [call(self.instance, byte) for byte in payload])
+                # Assert that the data line is set to the correct state
+                self.assertEqual(data, (test_int >> bit) & 0x01)
 
     def test_commit_method_correctly_commits_framebuffer_to_leds(self):
         # The system must have sent the following information
         # Start sequence
         # 4-byte sequence for each LED
         # End sequence
-        with patch('apa102_gpiod.apa102.APA102._write_bytes', autospec=True,
-                   spec_set=True) as mock_write_bytes:
-            self.setUp()
-            payload = (apa102.APA102_START + b''.join([apa102._pack_wrgb(o)
-                                                       for o in self.instance])
-                       + apa102._generate_end_sequence(len(self.instance)))
-            self.instance.commit()
-            mock_write_bytes.assert_called_once()
-            called_payload = mock_write_bytes.call_args[0][1]
-            self.maxDiff = None
-            self.assertSequenceEqual(called_payload, payload)
+        waveform = []
+
+        def record_line_state(state):
+            waveform.append((state[0], state[1]))
+
+        self.mock_chip.return_value.get_lines.return_value.set_values. \
+            side_effect = record_line_state
+        # Force commiting of data
+        self.instance._data_modified = True
+        self.instance.commit()
+        payload = (apa102.APA102_START + b''.join([apa102._pack_wrgb(o)
+                                                   for o in self.instance])
+                   + apa102._generate_end_sequence(len(self.instance)))
+
+        payload_sent = 0
+        bits_read = 0
+        for t, (clock, data) in enumerate(waveform):
+            if clock:
+                # Read data line when clock line is high
+                payload_sent <<= 1
+                payload_sent |= data
+                bits_read += 1
+        self.assertEqual(bits_read % 8, 0)
+        payload_sent_bytes = payload_sent.to_bytes(
+            bits_read // 8, byteorder='big', signed=False)
+        self.assertSequenceEqual(payload_sent_bytes, payload, bytes)
 
     def test_commit_method_correctly_performs_delta_update(self):
         # First call should update because reset was not specified
-        with patch.object(self.instance, '_write_bytes', spec_set=True,
-                          autospec=True) as mock_write_bytes:
+        with patch.object(self.instance._lines, 'set_values', spec_set=True,
+                          autospec=True) as mock_set_values:
             self.instance.commit()
-            mock_write_bytes.assert_called_once()
-
-        # Second call should not update because the delta flag should have been
-        # cleared
-        with patch.object(self.instance, '_write_bytes', spec_set=True,
-                          autospec=True) as mock_write_bytes:
+            mock_set_values.assert_called()
+            mock_set_values.reset_mock()
+            # Second call should not update because the delta flag should have
+            # been cleared
             self.instance.commit()
-            mock_write_bytes.assert_not_called()
-
-        # Modifying the framebuffer with a different value should
-        # cause an update.
-        self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
-        with patch.object(self.instance, '_write_bytes', spec_set=True,
-                          autospec=True) as mock_write_bytes:
+            mock_set_values.assert_not_called()
+            mock_set_values.reset_mock()
+            # Modifying the framebuffer with a different value should
+            # cause an update.
+            self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
             self.instance.commit()
-            mock_write_bytes.assert_called_once()
-
-        # Updating the framebuffer with the same value should not
-        # cause an update
-        self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
-
-        with patch.object(self.instance, '_write_bytes', spec_set=True,
-                          autospec=True) as mock_write_bytes:
+            mock_set_values.assert_called()
+            mock_set_values.reset_mock()
+            # Updating the framebuffer with the same value should not
+            # cause an update
+            self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
             self.instance.commit()
-            mock_write_bytes.assert_not_called()
+            mock_set_values.assert_not_called()
 
     def test_close_method_correctly_releases_resources(self):
         self.instance.close()

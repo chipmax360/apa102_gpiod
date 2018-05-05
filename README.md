@@ -44,7 +44,7 @@ test results:
 
 Device | Software                        | Achieved data rate (``kByte/s``)
 -------| --------------------------------| --------------------------------
-RPI3 B | Arch Linux ARM Linux 4.14.37    | 12500
+RPI3 B | Arch Linux ARM Linux 4.14.37    | 13962
 
 Caveats
 -------

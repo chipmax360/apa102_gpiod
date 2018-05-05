@@ -8,6 +8,7 @@ See LICENSE.txt for details.
 """
 import gpiod
 import struct
+import typing
 
 import collections
 from collections.abc import Sequence
@@ -73,7 +74,14 @@ def _pack_wrgb(o: LedOutput) -> bytes:
     return struct.pack('<BBBB', o.brt | 0xe0, o.b, o.g, o.r)
 
 
-def _ledoutput_from_led_command(command: bytes) -> LedOutput:
+def _pack_wrgb_direct(d: typing.Sequence[int], o: LedOutput) -> None:
+    d[0] = (o.brt | 0xe0)
+    d[1] = o.b
+    d[2] = o.g
+    d[3] = o.r
+
+
+def _ledoutput_from_led_command(command: typing.Sequence[int]) -> LedOutput:
     """
     Convert a 4-byte LED output command sequence to a LedOutput object.
 
@@ -101,8 +109,6 @@ class APA102(Sequence):
         :raises OSError: on inability to acquire control of I/O lines
         """
         self._leds = leds
-        self._clk = clk
-        self._data = data
         self._data_modified = True
 
         self._chip = gpiod.Chip(chip, gpiod.Chip.OPEN_BY_PATH)
@@ -110,9 +116,11 @@ class APA102(Sequence):
         self._lines.request(f'apa102_gpiod',
                             gpiod.LINE_REQ_DIR_OUT, 0, (0, 0))
 
-        self._data = bytearray(APA102_START) + bytearray(
-            _pack_wrgb(LedOutput(0, 0, 0, 0)) * len(self))
+        self._data = bytearray(APA102_START)
+        self._data.extend(_pack_wrgb(LedOutput(0, 0, 0, 0)) * len(self))
         self._data.extend(_generate_end_sequence(self._leds))
+        self._view = memoryview(self._data)
+        self._wrgb_buffer = bytearray(4)
 
         if reset:
             self.commit()
@@ -130,7 +138,7 @@ class APA102(Sequence):
         if not (0 <= i < self._leds):
             raise IndexError(f'{self.__class__.__name__}: '
                              'out-of-range LED index')
-        return _ledoutput_from_led_command(self._data[4 + (i * 4):8 + (i * 4)])
+        return _ledoutput_from_led_command(self._view[4 + (i * 4):8 + (i * 4)])
 
     def __setitem__(self, i: int, o: LedOutput):
         """
@@ -147,9 +155,7 @@ class APA102(Sequence):
         if not (0 <= i < self._leds):
             raise IndexError(f'{self.__class__.__name__}: '
                              'out-of-range LED index')
-        if o != self[i]:
-            self._data[4 + (i * 4):8 + (i * 4)] = _pack_wrgb(o)
-            self._data_modified = True
+        self.set_unchecked(i, o)
 
     def __len__(self) -> int:
         """
@@ -168,32 +174,10 @@ class APA102(Sequence):
         :return: test result.
         """
         for i in range(len(self)):
-            if _pack_wrgb(o) == self._data[4 + (i * 4):8 + (i * 4)]:
+            if _pack_wrgb(o) == self._view[4 + (i * 4):8 + (i * 4)]:
                 return True
         else:
             return False
-
-    def _write_byte(self, byte: int) -> None:
-        """
-        Write a byte to the APA102 device
-
-        :param byte: byte to send
-        :raises OSError: on write failure
-        """
-        for i in range(7, -1, -1):
-            bit = ((byte >> i) & 0x01)
-            self._lines.set_values((0, bit))
-            self._lines.set_values((1, bit))
-
-    def _write_bytes(self, data: bytes) -> None:
-        """
-        Write multiple bytes to the APA102 device
-
-        :param data: bytes to write
-        :raises OSError: on write failure
-        """
-        for byte in data:
-            self._write_byte(byte)
 
     def commit(self):
         """
@@ -206,11 +190,55 @@ class APA102(Sequence):
             Undefined once the object has been ``close()``'d
         """
         if self._data_modified:
-            self._write_bytes(self._data)
-        self._data_modified = False
+            set_values = self._lines.set_values
+            for i in range(len(self._data)):
+                byte = self._data[i]
+                bit = ((byte >> 7) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 6) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 5) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 4) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 3) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 2) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 1) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+                bit = ((byte >> 0) & 0x01)
+                set_values((0, bit))
+                set_values((1, bit))
+            self._data_modified = False
 
     def close(self):
         """
         Closes the APA102 object and relinquish control of the I/O lines
         """
+        self._view.release()
         self._lines.release()
+
+    def set_unchecked(self, i: int, o: LedOutput) -> None:
+        """
+        Set the output of a particular LED.
+
+        :param i: index of the LED to set the output setting for.
+        :param o: desired LED output
+
+        .. warning::
+
+            This method does *NOT* do any checking on the led output setting
+            or any checking on the index of the LED.
+        """
+        _pack_wrgb_direct(self._wrgb_buffer, o)
+        if self._wrgb_buffer != self._view[4 + (i * 4):8 + (i * 4)]:
+            self._view[4 + (i * 4):8 + (i * 4)] = self._wrgb_buffer
+            self._data_modified = True
