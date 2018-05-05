@@ -74,7 +74,7 @@ def _pack_wrgb(o: LedOutput) -> bytes:
     return struct.pack('<BBBB', o.brt | 0xe0, o.b, o.g, o.r)
 
 
-def _pack_wrgb_direct(d: typing.Sequence[int], o: LedOutput) -> None:
+def _pack_wrgb_direct(d: typing.MutableSequence[int], o: LedOutput) -> None:
     d[0] = (o.brt | 0xe0)
     d[1] = o.b
     d[2] = o.g
