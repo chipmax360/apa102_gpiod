@@ -68,22 +68,24 @@ class TestMiscFunctions(unittest.TestCase):
                                     * edges_per_byte,
                                     edges_required)
 
-    def test_check_pack_wrgb_returns_correct_command_sequence(self):
-        output = apa102.LedOutput(11, 125, 65, 200)
-        packed = apa102._pack_wrgb(output)
-        self.assertEquals(packed[0], output.brt | 0xe0)
-        self.assertEquals(packed[1], output.b)
-        self.assertEquals(packed[2], output.g)
-        self.assertEquals(packed[3], output.r)
+    def test_check_pack_brgb_direct_correctly_packs_values(self):
+        pack_target = bytearray(4)
+        apa102._pack_brgb_direct(pack_target, 0x0f, 0xde, 0xad, 0xbe)
+        self.assertSequenceEqual(pack_target,
+                                 b'\xef\xbe\xad\xde')
+
+    def test_check_pack_brgb_returns_correct_command_sequence(self):
+        output = apa102.LedOutput(0x0f, 0xde, 0xad, 0xbe)
+        packed = apa102._pack_brgb(output)
+        self.assertSequenceEqual(packed,
+                                 b'\xef\xbe\xad\xde')
 
     def test_check_led_output_from_led_command_returns_correct_ledoutput_tuple(
             self):
-        packed = b'\xef\x45\xab\xde'
+        output = apa102.LedOutput(11, 0xde, 0x11, 0xff)
+        packed = apa102._pack_brgb(output)
         unpacked = apa102._ledoutput_from_led_command(packed)
-        self.assertEquals(unpacked.brt, 0x0f)
-        self.assertEquals(unpacked.r, 0xde)
-        self.assertEquals(unpacked.g, 0xab)
-        self.assertEquals(unpacked.b, 0x45)
+        self.assertEquals(unpacked, output)
 
 
 class TestAPA102(unittest.TestCase):
@@ -91,11 +93,12 @@ class TestAPA102(unittest.TestCase):
     Test class containing test cases for the APA102 class.
     """
 
-    @patch('apa102_gpiod.apa102.gpiod.Chip', autospec=True, spec_set=True)
-    def setUp(self, mock_chip):
-        self.instance = apa102.APA102('/dev/gpiochip0',
-                                      8, 24, 23, False)
-        self.mock_chip = mock_chip
+    def setUp(self):
+        with patch('apa102_gpiod.apa102.gpiod.Chip',
+                   autospec=True, spec_set=True) as mock_chip:
+            self.instance = apa102.APA102('/dev/gpiochip0',
+                                          8, 24, 23, False)
+            self.mock_chip = mock_chip
 
     def test_init_magic_method_sets_up_gpio_lines(self):
         """
@@ -154,6 +157,8 @@ class TestAPA102(unittest.TestCase):
             mock_check.assert_called_once_with(output)
 
     def test_setitem_getitem_magic_methods_correctly_sets_and_gets_item(self):
+        # Since it uses set_brgb_unchecked() internally, the success of this
+        # test also means that the set_brgb_unchecked() method succedded.
         output = apa102.LedOutput(1, 4, 5, 6)
         self.instance[0] = output
         self.assertEquals(self.instance[0], output)
@@ -221,7 +226,7 @@ class TestAPA102(unittest.TestCase):
         # Force commiting of data
         self.instance._data_modified = True
         self.instance.commit()
-        payload = (apa102.APA102_START + b''.join([apa102._pack_wrgb(o)
+        payload = (apa102.APA102_START + b''.join([apa102._pack_brgb(o)
                                                    for o in self.instance])
                    + apa102._generate_end_sequence(len(self.instance)))
 
@@ -238,31 +243,8 @@ class TestAPA102(unittest.TestCase):
             bits_read // 8, byteorder='big', signed=False)
         self.assertSequenceEqual(payload_sent_bytes, payload, bytes)
 
-    def test_commit_method_correctly_performs_delta_update(self):
-        # First call should update because reset was not specified
-        with patch.object(self.instance._lines, 'set_values', spec_set=True,
-                          autospec=True) as mock_set_values:
-            self.instance.commit()
-            mock_set_values.assert_called()
-            mock_set_values.reset_mock()
-            # Second call should not update because the delta flag should have
-            # been cleared
-            self.instance.commit()
-            mock_set_values.assert_not_called()
-            mock_set_values.reset_mock()
-            # Modifying the framebuffer with a different value should
-            # cause an update.
-            self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
-            self.instance.commit()
-            mock_set_values.assert_called()
-            mock_set_values.reset_mock()
-            # Updating the framebuffer with the same value should not
-            # cause an update
-            self.instance[0] = apa102.LedOutput(31, 255, 255, 255)
-            self.instance.commit()
-            mock_set_values.assert_not_called()
-
     def test_close_method_correctly_releases_resources(self):
         self.instance.close()
         self.mock_chip.return_value.get_lines.return_value.release. \
             assert_called_once_with()
+        self.mock_chip.return_value.close.assert_called_once_with()
