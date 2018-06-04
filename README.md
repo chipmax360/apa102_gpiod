@@ -42,7 +42,7 @@ Since we're accessing the GPIOs through the character device and not through
 some memory-mapped magic, performance is guaranteed to be lower. Here are some
 test results:
 
-Device | Software                        | Achieved data rate (``kByte/s``)
+Device | Software                        | Achieved data rate (``byte/s``)
 -------| --------------------------------| --------------------------------
 RPI3 B | Arch Linux ARM Linux 4.14.37    | 13962
 
